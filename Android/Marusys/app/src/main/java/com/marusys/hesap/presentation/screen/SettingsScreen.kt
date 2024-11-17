@@ -1,6 +1,8 @@
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Debug
+import android.os.Environment
+import android.util.Log
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
@@ -17,7 +19,13 @@ import androidx.compose.ui.unit.sp
 import com.marusys.hesap.R
 import com.marusys.hesap.presentation.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
+import java.io.File
+import java.io.FileOutputStream
 
+
+// 전역 배열
+val cpuUsageList = mutableStateListOf<String>() // CPU 사용량 저장
+val memoryUsageList = mutableStateListOf<String>() // 메모리 사용량 저장
 
 @Composable
 fun SettingScreen(
@@ -26,6 +34,7 @@ fun SettingScreen(
     val context = LocalContext.current
     var cpuUsage by remember { mutableStateOf("Loading...") }
     var appMemoryUsage by remember { mutableStateOf("Loading...") }
+    var time by remember { mutableStateOf(0) } // 경과 시간 저장
 
     // 메모리 사용량, CPU 사용량 업데이트
     LaunchedEffect(Unit) {
@@ -39,10 +48,23 @@ fun SettingScreen(
             val currentCpuTime = Debug.threadCpuTimeNanos()
             val cpuUsageMs = (currentCpuTime - previousCpuTime) / 1_000_000  // 나노초 → 밀리초 변환
             cpuUsage = "$cpuUsageMs ms"
+//            cpuUsageList.add(cpuUsage) // 배열에 추가
+//            time++ // 시간 증가
+
             previousCpuTime = currentCpuTime  // 이전 시간 업데이트
 
             // 앱 메모리 사용량 계산
             appMemoryUsage = getAppMemoryUsage()
+//            memoryUsageList.add(appMemoryUsage) // 배열에 추가
+
+            // 로그 출력
+//            Log.d("AppUsageMonitor", "Time: ${time}s, CPU Usage: $cpuUsage, Memory Usage: $appMemoryUsage")
+
+
+//            if(time == 100) {
+//                logCollectedData()
+//                saveDataToDownloads(context)
+//            }
         }
     }
 
@@ -148,3 +170,29 @@ fun getAppMemoryUsage(): String {
     return "$totalPss MB"
 }
 
+// 배열 데이터를 로그로 출력
+fun logCollectedData() {
+    Log.d("AppUsageMonitor", "CPU Usage Data: $cpuUsageList")
+    Log.d("AppUsageMonitor", "Memory Usage Data: $memoryUsageList")
+}
+
+// 배열 데이터를 파일로 저장
+fun saveDataToDownloads(context: Context, fileName: String = "resnet_usage_log.txt") {
+    try {
+        // Downloads 폴더 경로 가져오기
+        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val file = File(downloadsDir, fileName)
+
+        FileOutputStream(file).use { fos ->
+            fos.write("CPU Usage Data:\n".toByteArray())
+            cpuUsageList.forEach { fos.write("$it\n".toByteArray()) }
+
+            fos.write("\nMemory Usage Data:\n".toByteArray())
+            memoryUsageList.forEach { fos.write("$it\n".toByteArray()) }
+        }
+
+        Log.d("AppUsageMonitor", "Data saved to ${file.absolutePath}")
+    } catch (e: Exception) {
+        Log.e("AppUsageMonitor", "Error saving data to file: ${e.message}")
+    }
+}

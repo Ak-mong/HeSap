@@ -1,4 +1,4 @@
-package com.marusys.hesap;
+package com.marusys.hesap.classifier;
 
 import android.content.Context;
 import android.content.res.AssetFileDescriptor;
@@ -13,15 +13,15 @@ import java.nio.channels.FileChannel;
 import java.util.HashMap;
 import java.util.Map;
 
-public class AudioClassifier {
+public class AudioClassifier extends BaseAudioClassifier {
     private static final String MODEL_FILE = "trigger_word_detection_model_largeDataSet_MelIntoLayer_sr16000_B32_lr1e-4_pat20.tflite";
     private Interpreter tflite;
     private int inputHeight;
     private int inputWidth;
     private int inputChannels;
     public AudioClassifier(Context context) {
+        super(context);
         try {
-
             tflite = new Interpreter(loadModelFile(context, MODEL_FILE));
             // 입력 텐서의 형식 출력
             int[] inputShape = tflite.getInputTensor(0).shape();
@@ -33,20 +33,7 @@ public class AudioClassifier {
         }
     }
 
-    // 입력 버퍼로 들어오는 값을 통해 분류를 수행하는 메소드
-    public float[] classify(ByteBuffer inputBuffer) {
-        float[][] outputBuffer = new float[1][1];
-
-        Object[] inputs = new Object[]{inputBuffer};
-        Map<Integer, Object> outputs = new HashMap<>();
-        outputs.put(0, outputBuffer);
-
-        // 모델 실행
-        tflite.runForMultipleInputsOutputs(inputs, outputs);
-
-        return outputBuffer[0];
-    }
-
+    @Override
     public float[] classify(float[] audioData) {
 
         float[][] expandedAudioData = new float[1][audioData.length];

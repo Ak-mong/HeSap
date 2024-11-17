@@ -30,6 +30,9 @@ import com.marusys.hesap.MainActivity.Constants.TRIGGER_WORD
 import com.marusys.hesap.MainActivity.Constants.WINDOW_SIZE
 import androidx.lifecycle.lifecycleScope
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import com.marusys.hesap.classifier.AudioClassifier
+import com.marusys.hesap.classifier.BaseAudioClassifier
+import com.marusys.hesap.classifier.ResnetClassifier
 import com.marusys.hesap.feature.MemoryUsageManager
 import com.marusys.hesap.feature.VoiceRecognitionState
 import com.marusys.hesap.feature.VoiceStateManager
@@ -45,7 +48,6 @@ class MainActivity : ComponentActivity() {
     // 여러 페이지에서 사용하는 값을 관리하는 viewModel
     private val mainViewModel = MainViewModel()
     private val handler = Handler(Looper.getMainLooper())
-    private lateinit var memoryUsageManager: MemoryUsageManager
     private val OVERLAY_PERMISSION_REQUEST_CODE = 1
 
     // 모델 타입
@@ -53,21 +55,29 @@ class MainActivity : ComponentActivity() {
         RESNET, CNN, GRU
     }
 
-    var MODEL_TYPE: ModelType = ModelType.GRU
+    // CNN & RNN은 같은 AudioClassifer 클래스를 사용하므로 (RNN <-> CNN) 변경 시 클래스 내부 tflite 모델 (RNN <-> CNN) 변경 필요
+    var MODEL_TYPE: ModelType = ModelType.RESNET
 
+    // 녹음 관련 상수 정의
     object Constants {
-        // 녹음 관련 설정
+
+        // 호출어 성공 여부 판단을 위한 임계값
         const val THRESHOLD = 0.95
-        const val SAMPLE_RATE = 16000   // 샘플 레이트 16KHz (16000Hz)
-        const val RECORDING_TIME = 2    // 녹음 시간 (2초)
-        const val WINDOW_SIZE = SAMPLE_RATE * RECORDING_TIME  // 전체 window size
-        const val STEP_SIZE = SAMPLE_RATE / 2     // sliding window 사이즈 (겹치는 구간)
+
+        // 샘플 레이트 16KHz (16000Hz)
+        const val SAMPLE_RATE = 16000
+
+        // 녹음 시간 (2초)
+        const val RECORDING_TIME = 2
+
+        // 전체 window size
+        const val WINDOW_SIZE = SAMPLE_RATE * RECORDING_TIME
+
+        // sliding window 사이즈 (겹치는 구간)
+        const val STEP_SIZE = SAMPLE_RATE / 2
 
         // Resnet Softmax 분류를 위한 트리거워드 설정
         const val TRIGGER_WORD = "hey_ssafy"
-
-        // 라벨 정의 (모델 학습 시 사용한 라벨에 맞게 수정)
-        val LABELS = arrayOf("unknown", "ssafy")
     }
 
 
@@ -78,10 +88,11 @@ class MainActivity : ComponentActivity() {
                 "SPEECH_RECOGNITION_RESULT" -> {
                     val matches = intent.getStringArrayListExtra("matches")
                     val recognizedText = matches?.firstOrNull() ?: ""
-                    Log.d("MainActivity", "Received text: $recognizedText")
+
                     // 현재 표시 중인 윈도우 매니져가 있다면 메시지 업데이트
                     mainViewModel.setCommandText(recognizedText)
                 }
+
                 "AUDIO_SERVICE_STATE_CHANGED" -> {
                     val isRunning = intent.getBooleanExtra("isRunning", false)
                     mainViewModel.setAudioServiceRunning(isRunning)
@@ -91,13 +102,14 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+
         super.onCreate(savedInstanceState)
+
         // 오디오 녹음 권한이 있는지 확인
         checkAndRequestPermissions()
+
         // 오버레이 권한 체크 및 요청
         checkOverlayPermission()
-        // ViewModel의 메모리 사용량 업데이트 시작
-//        mainViewModel.updateMemoryUsage(this)
 
         // BroadcastReceiver 등록
         LocalBroadcastManager.getInstance(this).registerReceiver(
@@ -108,38 +120,45 @@ class MainActivity : ComponentActivity() {
             }
         )
 
-        // 상태 관찰, 이걸 통해 관리해도 됨
+        // 상태 관찰
         lifecycleScope.launch {
             VoiceStateManager.voiceState.collect { state ->
                 when (state) {
                     is VoiceRecognitionState.WaitingForHotword -> {
-                        Log.e("","호출어 대기 상태")
-                            startRecordingWithModel()
+                        Log.e("", "호출어 대기 상태")
+                        startRecordingWithModel()
                     }
+
                     is VoiceRecognitionState.HotwordDetecting -> {
-                        Log.e("","호출어 인식 상태")
+                        Log.e("", "호출어 인식 상태")
                     }
+
                     is VoiceRecognitionState.CommandListening -> {
-                        Log.e("","명령 들은 상태")
+                        Log.e("", "명령 들은 상태")
                     }
+
                     else -> {
                         // 다른 상태 처리
                     }
                 }
             }
         }
+
         setContent {
             Surface(
                 modifier = Modifier.fillMaxSize()
             ) {
 
-            AudioScreen(
-                viewModel = mainViewModel,
-            )
+                AudioScreen(
+                    viewModel = mainViewModel,
+                )
             }
         }
     }
 
+    /*
+     *  각종 권한 체크 함수
+     */
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<String>,
@@ -161,8 +180,10 @@ class MainActivity : ComponentActivity() {
 
     private fun checkOverlayPermission() {
         if (!Settings.canDrawOverlays(this)) {
-            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName"))
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
             startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE)
         }
     }
@@ -174,6 +195,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
     }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == OVERLAY_PERMISSION_REQUEST_CODE) {
@@ -209,23 +231,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ======== 음성 인식 기반 분류 ========
-    fun cnnRealTimeRecordAndClassify() {
+
+    /*
+     * 음성인식 수행 메서드
+     */
+
+    // 음성 인식 및 Classifer 기반 분석 수행 공통 메서드
+    fun startRealTimeRecognition(
+        classifierProvider: () -> BaseAudioClassifier, // 모델별 분류기 생성자
+    ) {
         val bufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         ) * RECORDING_TIME
 
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) != PackageManager.PERMISSION_GRANTED
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
         ) {
             return
         }
 
-        // 상태 표시
         runOnUiThread {
             mainViewModel.setResultText("듣고 있는 중이에요.")
         }
@@ -240,200 +266,7 @@ class MainActivity : ComponentActivity() {
             )
             if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
                 Log.e("MainActivity", "AudioRecord 초기화 실패")
-                mainViewModel.setResultText("녹음 초기화 실패")
-                return@Thread
-            }
-
-            val audioBuffer = ShortArray(bufferSize / 2)
-            val slidingWindowBuffer = FloatArray(WINDOW_SIZE)  // 1초 버퍼
-            var bufferPosition = 0
-
-            audioRecord.startRecording()
-
-            // 실시간으로 데이터를 읽어들여 모델로 전달
-            while (VoiceStateManager.voiceState.value == VoiceRecognitionState.WaitingForHotword) {
-                val readSize = audioRecord.read(audioBuffer, 0, audioBuffer.size)
-                if (readSize > 0) {
-                    for (i in 0 until readSize) {
-                        slidingWindowBuffer[bufferPosition] = audioBuffer[i] / 32768.0f
-                        bufferPosition++
-
-                        // 슬라이딩 윈도우가 채워졌으면 호출어 검출을 수행
-                        if (bufferPosition >= WINDOW_SIZE) {
-                            bufferPosition = 0
-
-                            try {
-                                val classifier = AudioClassifier(this)
-                                val inputBuffer = classifier.createInputBuffer(slidingWindowBuffer)
-                                val results = classifier.classify(inputBuffer)
-
-                                // results[0] 값을 실시간으로 화면에 표시
-                                runOnUiThread {
-                                    val percentage = String.format("%.2f%%", results[0] * 100)
-                                    mainViewModel.setResultText("확률값: $percentage")
-                                }
-
-                                // 호출어가 감지되면 팝업을 띄우고 스레드를 중단
-                                if (results[0] >= THRESHOLD) {
-                                    runOnUiThread {
-                                        startAudioService() // AudioService 시작
-                                    }
-                                    break  // 루프 종료
-                                }
-                            } catch (e: Exception) {
-                                Log.e("MainActivity", "분류 중 오류 발생", e)
-                                runOnUiThread {
-                                    mainViewModel.setResultText("분류 중 오류가 발생했습니다: " + e.message)
-                                }
-                            }
-                            // 슬라이딩 윈도우를 50% 이동시키기 위해 이전 데이터를 복사
-                            System.arraycopy(
-                                slidingWindowBuffer,
-                                STEP_SIZE,
-                                slidingWindowBuffer,
-                                0,
-                                WINDOW_SIZE - STEP_SIZE
-                            )
-                            bufferPosition = WINDOW_SIZE - STEP_SIZE
-                        }
-                    }
-                }
-            }
-            audioRecord.stop()
-            audioRecord.release()
-        }.start()
-    }
-
-    fun gruRealTimeRecordAndClassify() {
-        val bufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        ) * RECORDING_TIME
-
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-
-        // 상태 표시
-        runOnUiThread {
-            mainViewModel.setResultText("듣고 있는 중이에요.")
-        }
-
-        Thread {
-            val audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize
-            )
-            if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e("MainActivity", "AudioRecord 초기화 실패")
-                runOnUiThread {
-                    mainViewModel.setResultText("녹음 초기화 실패")
-                }
-                return@Thread
-            }
-
-            val audioBuffer = ShortArray(bufferSize / 2)
-            val slidingWindowBuffer = FloatArray(WINDOW_SIZE)  // 1초 버퍼
-            var bufferPosition = 0
-
-            audioRecord.startRecording()
-
-            // 실시간으로 데이터를 읽어들여 모델로 전달
-            while (VoiceStateManager.voiceState.value == VoiceRecognitionState.WaitingForHotword) {
-                val readSize = audioRecord.read(audioBuffer, 0, audioBuffer.size)
-                if (readSize > 0) {
-                    for (i in 0 until readSize) {
-                        slidingWindowBuffer[bufferPosition] = audioBuffer[i] / 32768.0f
-                        bufferPosition++
-
-                        // 슬라이딩 윈도우가 채워졌으면 호출어 검출을 수행
-                        if (bufferPosition >= WINDOW_SIZE) {
-                            bufferPosition = 0
-
-                            try {
-                                val classifier = AudioClassifier(this)
-                                val results = classifier.classify(slidingWindowBuffer)
-
-                                // results[0] 값을 실시간으로 화면에 표시
-                                runOnUiThread {
-                                    val percentage = String.format("%.2f%%", results[0] * 100)
-
-                                    mainViewModel.setResultText("확률값: $percentage")
-                                }
-
-                                // 호출어가 감지되면 팝업을 띄우고 스레드를 중단
-                                if (results[0] >= THRESHOLD) {
-                                    runOnUiThread {
-                                        startAudioService() // AudioService 시작
-                                    }
-                                    break  // 루프 종료
-                                }
-                            } catch (e: Exception) {
-                                Log.e("MainActivity", "분류 중 오류 발생", e)
-                                runOnUiThread {
-                                    mainViewModel.setResultText("분류 중 오류가 발생했습니다: " + e.message)
-                                }
-                            }
-                            // 슬라이딩 윈도우를 50% 이동시키기 위해 이전 데이터를 복사
-                            System.arraycopy(
-                                slidingWindowBuffer,
-                                STEP_SIZE,
-                                slidingWindowBuffer,
-                                0,
-                                WINDOW_SIZE - STEP_SIZE
-                            )
-                            bufferPosition = WINDOW_SIZE - STEP_SIZE
-                        }
-                    }
-                }
-            }
-            audioRecord.stop()
-            audioRecord.release()
-        }.start()
-    }
-
-    fun resnetRealTimeRecordAndClassify() {
-
-        val bufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        ) * RECORDING_TIME
-
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-
-        // 상태 표시
-        runOnUiThread {
-            mainViewModel.setResultText("듣고 있는 중이에요.")
-        }
-
-        Thread {
-            val audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize
-            )
-            if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e("MainActivity", "AudioRecord 초기화 실패")
-                runOnUiThread {
-                    mainViewModel.setResultText("녹음 초기화 실패")
-                }
+                runOnUiThread { mainViewModel.setResultText("녹음 초기화 실패") }
                 return@Thread
             }
 
@@ -443,7 +276,6 @@ class MainActivity : ComponentActivity() {
 
             audioRecord.startRecording()
 
-            // 실시간으로 데이터를 읽어들여 모델로 전달
             while (VoiceStateManager.voiceState.value == VoiceRecognitionState.WaitingForHotword) {
                 val readSize = audioRecord.read(audioBuffer, 0, audioBuffer.size)
                 if (readSize > 0) {
@@ -451,44 +283,30 @@ class MainActivity : ComponentActivity() {
                         slidingWindowBuffer[bufferPosition] = audioBuffer[i] / 32768.0f
                         bufferPosition++
 
-                        // 슬라이딩 윈도우가 채워졌으면 호출어 검출을 수행
                         if (bufferPosition >= WINDOW_SIZE) {
                             bufferPosition = 0
                             try {
-                                val classifier = ResnetClassifier(this)
-                                val results = classifier.classifyAudio(slidingWindowBuffer)
-                                val accuracy = ThresholdUtil.checkTrigger(results)
-                                val resultLabel = classifier.getLabel(results)
 
-                                val resultText = StringBuilder()
-                                val percentage = String.format("%.2f%%", accuracy * 100)
+                                // 선택한 classifier 기반 음성 분류 실행
+                                val classifier = classifierProvider()
+                                val results = classifier.classify(slidingWindowBuffer)
 
-                                resultText.append(classifier.getLabel(results))
-                                resultText.append(" : ")
-                                resultText.append(percentage)
-
-                                val finalResult = resultText.toString()
-
-                                // 정확도 값을 실시간으로 화면에 표시
-                                runOnUiThread {
-                                    mainViewModel.setResultText(finalResult)
+                                // Resnet 음성인식 결과 처리 -> Softmax
+                                if (MODEL_TYPE == ModelType.RESNET) {
+                                    processResNetResults(results, classifier)
+                                } else {
+                                    // CNN / GRU 음성인식 결과 처리 -> Sigmoid
+                                    processOtherModelResults(results)
                                 }
 
-                                // 호출어가 감지되면 팝업을 띄우고 스레드를 중단
-                                if (accuracy >= THRESHOLD && resultLabel.equals(TRIGGER_WORD)) {
-                                    runOnUiThread {
-                                        startAudioService() // AudioService 시작
-                                    }
-                                    break  // 루프 종료
-                                }
                             } catch (e: Exception) {
                                 Log.e("MainActivity", "분류 중 오류 발생", e)
                                 runOnUiThread {
-                                    mainViewModel.setResultText("분류 중 오류가 발생했습니다: " + e.message)
+                                    mainViewModel.setResultText("분류 중 오류가 발생했습니다: ${e.message}")
                                 }
                             }
 
-                            // 슬라이딩 윈도우를 50% 이동시키기 위해 이전 데이터를 복사
+                            // 슬라이딩 윈도우 이동
                             System.arraycopy(
                                 slidingWindowBuffer,
                                 STEP_SIZE,
@@ -501,21 +319,86 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+
             audioRecord.stop()
             audioRecord.release()
         }.start()
     }
+
+    // 모델별 음성인식 메서드
+    fun cnnRealTimeRecordAndClassify() {
+        startRealTimeRecognition(
+            classifierProvider = {AudioClassifier(this)},
+        )
+    }
+
+    fun gruRealTimeRecordAndClassify() {
+        startRealTimeRecognition(
+            classifierProvider = {AudioClassifier(this)},
+        )
+    }
+
+    fun resnetRealTimeRecordAndClassify() {
+        startRealTimeRecognition(
+            classifierProvider = {ResnetClassifier(this)},
+        )
+    }
+
+    // ResNet 결과 처리 메서드
+    private fun processResNetResults(
+        results: FloatArray,
+        classifier: BaseAudioClassifier,
+    ) {
+
+        // Softmax 계산 알고리즘을 통해 가장 높은 확률의 라벨 정확도 계산
+        val accuracy = ThresholdUtil.checkTrigger(results)
+
+        // 선택된 라벨 할당
+        val resultLabel = classifier.getLabel(results)
+
+        val resultText = "${resultLabel} : ${String.format("%.2f%%", accuracy * 100)}"
+
+        // UI에 선택된 라벨과 정확도 출력
+        runOnUiThread { mainViewModel.setResultText(resultText) }
+
+        // 정확도가 THRESHOLD 이상이고 내가 원하는 호출어가 맞다면 TTS 음성인식 수행
+        if (accuracy >= THRESHOLD && resultLabel == TRIGGER_WORD) {
+            runOnUiThread { startAudioService() }
+        }
+    }
+
+    // CNN & GRU 결과 처리 메서드
+    private fun processOtherModelResults(
+        results: FloatArray,
+    ) {
+
+        val accuracy = String.format("%.2f%%", results[0] * 100)
+
+        val resultText = "확률값 : $accuracy"
+
+        // UI에 정확도 출력
+        runOnUiThread { mainViewModel.setResultText(resultText) }
+
+        // 정확도가 THRESHOLD 이상인 경우 TTS 음성인식 수행
+        if (results[0] >= THRESHOLD) {
+            runOnUiThread { startAudioService() }
+        }
+    }
+
 
     // 로출어 인식 -> 서비스 시작
     private fun startAudioService() {
         val bundle = Bundle()
         bundle.putString("commandText", mainViewModel.commandText.value)
         bundle.putBoolean("isAudioServiceRunning", true)
+
         // intent AudioService로 넘기기
         val serviceIntent = Intent(this, AudioService::class.java)
         serviceIntent.putExtra("viewModelState", bundle)
+
         // 포그라운드 Service 시작
-//        ContextCompat.startForegroundService(this, serviceIntent)
+        // ContextCompat.startForegroundService(this, serviceIntent)
+
         VoiceStateManager.updateState(VoiceRecognitionState.HotwordDetecting) // 호출어 인식 완료, isListen = false
         startService(serviceIntent)
     }
@@ -529,98 +412,6 @@ class MainActivity : ComponentActivity() {
         VoiceStateManager.updateState(VoiceRecognitionState.WaitingForHotword) // 호출어 대기
     }
 
-
-    // 모델을 사용하여 음성 데이터를 분류하는 함수
-    fun resnetClassify() {
-        // AudioRecord 초기화 및 녹음 설정
-        val bufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        ) * RECORDING_TIME;
-
-        // 녹음 권한 확인
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-
-        // UI에 녹음 상태 표시
-        runOnUiThread {
-            mainViewModel.setResultText("듣고 있는 중이에요.")
-        }
-
-        // 백그라운드 스레드에서 녹음 및 분류 실행
-        Thread(Runnable {
-            val audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize
-            )
-
-            if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e("MainActivity", "AudioRecord 초기화 실패")
-                runOnUiThread {
-                    mainViewModel.setResultText("녹음 초기화 실패")
-                }
-                return@Runnable
-            }
-
-            val audioBuffer = ShortArray(WINDOW_SIZE) // 녹음 샘플을 저장할 버퍼
-
-            // 녹음 시작
-            audioRecord.startRecording()
-            audioRecord.read(audioBuffer, 0, audioBuffer.size)
-            audioRecord.stop()
-            audioRecord.release()
-
-            // short 배열을 float 배열로 변환 (정규화 포함)
-            val audioData = FloatArray(WINDOW_SIZE)
-
-            for (i in audioData.indices) {
-                audioData[i] = audioBuffer[i] / 32768.0f  // 16비트 정규화
-            }
-
-            // 입력 데이터 준비 완료
-            try {
-                // ResnetClassifier 초기화
-                val classifier = ResnetClassifier(this)
-
-                val results = classifier.classifyAudio(audioData)
-                val accuracy = ThresholdUtil.checkTrigger(results)
-
-                val percentage = String.format("%.2f%%", accuracy * 100)
-
-                Log.e("getLabel : ", classifier.getLabel(results))
-
-                val resultText = StringBuilder()
-                resultText.append(classifier.getLabel(results))
-                resultText.append(" : ")
-                resultText.append(percentage)
-
-                val finalResult = resultText.toString()
-                runOnUiThread {
-                    mainViewModel.setResultText(finalResult)
-                }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "분류 중 오류 발생", e)
-                runOnUiThread {
-                    mainViewModel.setResultText("분류 중 오류가 발생했습니다: " + e.message)
-                }
-            }
-        }).start()
-    }
-
-    fun resnetFromFile() {
-        val classifier = ResnetClassifier(this)
-
-        val result = classifier.classifyFromFile("data/left_2.wav");
-    }
 }
 
 
